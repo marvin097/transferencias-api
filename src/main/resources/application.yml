@@ -1,0 +1,28 @@
+# Configuracion comun. Sin perfil activo = local/pruebas con H2 en memoria.
+spring:
+  application:
+    name: transferencias-api
+  datasource:
+    url: jdbc:h2:mem:transferencias;MODE=MSSQLServer;DB_CLOSE_DELAY=-1
+  jpa:
+    open-in-view: false
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+core:
+  url: ${CORE_URL:http://localhost:8089/core/transfer}
+  username: ${CORE_USER:}
+  password: ${CORE_PASSWORD:}
+  connect-timeout: 2s
+  read-timeout: 12s

@@ -33,3 +33,7 @@ build/
 .vscode/
 *:Zone.Identifier
 *:Zone.Identifier
+
+### Local ###
+.env
+build.log

@@ -1,0 +1,15 @@
+# Ambiente: qa
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+core:
+  url: ${CORE_URL}
+  username: ${CORE_USER}
+  password: ${CORE_PASSWORD}
+
+logging:
+  level:
+    com.izalco.transferencias: INFO
