@@ -44,10 +44,14 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- XML para el core legado (Jackson 3) -->
+        <!-- Migraciones de base de datos -->
         <dependency>
-            <groupId>tools.jackson.dataformat</groupId>
-            <artifactId>jackson-dataformat-xml</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-sqlserver</artifactId>
         </dependency>
 
         <!-- Bases de datos: H2 (local/pruebas) y SQL Server (contenedores) -->
