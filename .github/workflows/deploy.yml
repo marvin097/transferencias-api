@@ -1,0 +1,117 @@
+# Despliegue reutilizable: el MISMO workflow se usa para dev, qa y prod.
+# Solo cambian el ambiente de GitHub (reglas de aprobación y secretos propios) y el perfil de Spring.
+#
+# Ambiente simulado: como la prueba no incluye infraestructura real, cada "despliegue" levanta
+# la imagen publicada junto con SQL Server y el core simulado dentro del runner, y ejecuta
+# pruebas de humo. En una instalación real este paso desplegaría la misma imagen (por digest)
+# en Kubernetes / Azure Container Apps del ambiente correspondiente.
+
+name: Despliegue
+
+on:
+  workflow_call:
+    inputs:
+      ambiente:
+        type: string
+        required: true
+      imagen:
+        description: Imagen inmutable, ghcr.io/...@sha256:...
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: ${{ inputs.ambiente }}
+    runs-on: ubuntu-latest
+    # El ambiente de GitHub aplica las reglas: en prod, aprobación manual y sin auto-aprobación.
+    environment: ${{ inputs.ambiente }}
+    env:
+      API_IMAGE: ${{ inputs.imagen }}
+      SPRING_PROFILES_ACTIVE: ${{ inputs.ambiente }}
+      CORE_USER: svc_core_${{ inputs.ambiente }}
+      # Secretos propios de cada ambiente (configurados en GitHub, nunca en el repositorio).
+      MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
+      APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
+      CORE_PASSWORD: ${{ secrets.CORE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Controles previos al despliegue
+        run: |
+          [[ "$API_IMAGE" == *@sha256:* ]] || { echo "::error::Solo se despliegan imágenes por digest"; exit 1; }
+          [[ "${{ inputs.version }}" != *SNAPSHOT* ]] || { echo "::error::No se despliegan SNAPSHOT"; exit 1; }
+          for s in MSSQL_SA_PASSWORD APP_DB_PASSWORD CORE_PASSWORD; do
+            [ -n "${!s}" ] || { echo "::error::Falta el secreto $s en el ambiente ${{ inputs.ambiente }}"; exit 1; }
+          done
+
+      - name: Iniciar sesión en GHCR con la identidad del pipeline
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Desplegar
+        run: |
+          docker compose pull api
+          docker compose up -d --no-build
+          for i in $(seq 1 60); do
+            if curl -sf localhost:8080/actuator/health > /dev/null; then echo "API arriba"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::La API no respondió a tiempo"; exit 1
+
+      - name: Pruebas de humo
+        run: |
+          set -euo pipefail
+          LLAVE="smoke-${{ inputs.ambiente }}-${GITHUB_RUN_ID}"
+          CUERPO='{"cuentaOrigen":"100200300","cuentaDestino":"900800700","bancoDestino":"BIZ-0042","monto":150.75,"moneda":"USD","concepto":"Prueba de humo","fechaSolicitud":"2026-10-01T14:32:10-06:00"}'
+
+          curl -sf localhost:8080/actuator/health | grep -q '"UP"'
+
+          echo "1) Transferencia aprobada"
+          R1=$(curl -s -o /tmp/r1.json -w '%{http_code}' -X POST localhost:8080/transferencias \
+            -H 'Content-Type: application/json' -H "X-Idempotency-Key: $LLAVE" -d "$CUERPO")
+          [ "$R1" = "201" ] || { cat /tmp/r1.json; echo "::error::Se esperaba 201 y llegó $R1"; exit 1; }
+
+          echo "2) Reintento con la misma llave no duplica"
+          curl -s -D /tmp/h2.txt -o /dev/null -X POST localhost:8080/transferencias \
+            -H 'Content-Type: application/json' -H "X-Idempotency-Key: $LLAVE" -d "$CUERPO"
+          grep -qi '^Idempotent-Replayed: true' /tmp/h2.txt || { echo "::error::El reintento no fue idempotente"; exit 1; }
+
+          echo "3) Rechazo de negocio traducido"
+          R3=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/transferencias \
+            -H 'Content-Type: application/json' -H "X-Idempotency-Key: $LLAVE-51" -d "${CUERPO/150.75/51.00}")
+          [ "$R3" = "422" ] || { echo "::error::Se esperaba 422 y llegó $R3"; exit 1; }
+
+          if [ "${{ inputs.ambiente }}" = "prod" ]; then
+            echo "4) Swagger UI apagado en prod"
+            R4=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/swagger-ui.html)
+            [ "$R4" = "404" ] || { echo "::error::Swagger UI expuesto en prod ($R4)"; exit 1; }
+          fi
+          echo "Pruebas de humo OK"
+
+      - name: Registro del despliegue
+        if: always()
+        run: |
+          {
+            echo "### Despliegue ${{ inputs.ambiente }}: ${{ job.status }}"
+            echo "| Dato | Valor |"
+            echo "|---|---|"
+            echo "| Versión | \`${{ inputs.version }}\` |"
+            echo "| Imagen | \`${{ inputs.imagen }}\` |"
+            echo "| Identidad de despliegue | GITHUB_TOKEN (github-actions[bot]) |"
+            echo "| Cambio iniciado por | ${{ github.triggering_actor }} |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Logs si falló
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Limpiar ambiente simulado
+        if: always()
+        run: docker compose down -v

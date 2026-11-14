@@ -1,0 +1,6 @@
+# Cambios al pipeline, a la configuración de build/cobertura y a los ambientes requieren revisión.
+/.github/        @marvin097
+/pom.xml         @marvin097
+/Dockerfile      @marvin097
+/docker-compose.yml @marvin097
+/src/main/resources/application-prod.yml @marvin097

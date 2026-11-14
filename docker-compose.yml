@@ -50,19 +50,20 @@ services:
 
   api:
     build: .
-    image: transferencias-api:local
+    # En local se construye; en el pipeline se usa la imagen publicada (por digest).
+    image: ${API_IMAGE:-transferencias-api:local}
     depends_on:
       sqlserver-init:
         condition: service_completed_successfully
       core-simulado:
         condition: service_started
     environment:
-      SPRING_PROFILES_ACTIVE: dev
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
       DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=transferencias;encrypt=true;trustServerCertificate=true
       DB_USER: app_transferencias
       DB_PASSWORD: ${APP_DB_PASSWORD:?Defina APP_DB_PASSWORD en .env}
       CORE_URL: http://core-simulado:8080/core/transfer
-      CORE_USER: svc_core_dev
+      CORE_USER: ${CORE_USER:-svc_core_dev}
       CORE_PASSWORD: ${CORE_PASSWORD:?Defina CORE_PASSWORD en .env}
     ports:
       - "8080:8080"

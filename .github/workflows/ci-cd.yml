@@ -1,0 +1,171 @@
+# Pipeline de entrega de transferencias-api.
+#
+#   build  ->  publish  ->  deploy dev  ->  deploy qa  ->  [aprobación manual]  ->  deploy prod
+#
+# - build: compila, ejecuta las pruebas y FALLA si la cobertura de líneas es menor a 80 % (JaCoCo, fijo en el pom).
+# - publish: construye la imagen UNA sola vez con versión de release (nunca SNAPSHOT) y la publica en GHCR.
+# - deploy: promueve ESA MISMA imagen (referenciada por digest sha256) a dev, qa y prod.
+# - Identidad: todo usa el GITHUB_TOKEN efímero del pipeline (identidad de servicio), nunca un usuario personal.
+# - prod: el ambiente "prod" exige aprobación de un revisor y prohíbe que apruebe quien disparó el cambio.
+
+name: CI/CD transferencias-api
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compilar, probar y validar cobertura
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Calcular versión de release
+        id: version
+        run: |
+          # 1.0.0-SNAPSHOT en el pom  ->  1.0.<número de ejecución>, ej. 1.0.27
+          BASE=$(python3 -c "import xml.etree.ElementTree as E; n={'m':'http://maven.apache.org/POM/4.0.0'}; print(E.parse('pom.xml').getroot().find('m:version', n).text)")
+          VERSION="$(echo "$BASE" | cut -d. -f1-2).${GITHUB_RUN_NUMBER}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versión: $VERSION (pom: $BASE)"
+
+      - name: Fijar versión (sin SNAPSHOT)
+        run: ./mvnw -B -ntp versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+
+      - name: Compilar, pruebas y cobertura mínima 80 %
+        run: ./mvnw -B -ntp clean verify
+
+      - name: Resumen de cobertura
+        if: always()
+        run: |
+          CSV=target/site/jacoco/jacoco.csv
+          if [ -f "$CSV" ]; then
+            python3 - "$CSV" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import csv, sys
+          f = list(csv.DictReader(open(sys.argv[1])))
+          cubiertas = sum(int(r["LINE_COVERED"]) for r in f)
+          total = cubiertas + sum(int(r["LINE_MISSED"]) for r in f)
+          print(f"### Cobertura de líneas: {100 * cubiertas / total:.1f} % (mínimo exigido: 80 %)")
+          PY
+          fi
+
+      - name: Guardar JAR
+        uses: actions/upload-artifact@v5
+        with:
+          name: app-jar
+          path: target/transferencias-api-${{ steps.version.outputs.version }}.jar
+          retention-days: 7
+
+      - name: Guardar reporte de cobertura
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: reporte-cobertura
+          path: target/site/jacoco/
+          retention-days: 7
+
+  publish:
+    name: Publicar imagen versionada
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      imagen: ${{ steps.push.outputs.imagen }}
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Descargar el JAR probado
+        uses: actions/download-artifact@v6
+        with:
+          name: app-jar
+          path: target/
+
+      - name: Validar que no es SNAPSHOT
+        run: |
+          if [[ "$VERSION" == *SNAPSHOT* ]]; then
+            echo "::error::No se publican versiones SNAPSHOT"; exit 1
+          fi
+
+      - name: Iniciar sesión en GHCR con la identidad del pipeline
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Construir y publicar imagen
+        id: push
+        run: |
+          REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build \
+            --build-arg VERSION="$VERSION" \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            -t "$REPO:$VERSION" .
+          docker push "$REPO:$VERSION"
+          IMAGEN=$(docker inspect --format '{{index .RepoDigests 0}}' "$REPO:$VERSION")
+          echo "imagen=$IMAGEN" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Imagen publicada"
+            echo "- Versión: \`$VERSION\`"
+            echo "- Imagen (inmutable): \`$IMAGEN\`"
+            echo "- Commit: \`$GITHUB_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: Desplegar dev
+    needs: [build, publish]
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      ambiente: dev
+      imagen: ${{ needs.publish.outputs.imagen }}
+      version: ${{ needs.build.outputs.version }}
+    secrets: inherit
+
+  deploy-qa:
+    name: Desplegar qa
+    needs: [build, publish, deploy-dev]
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      ambiente: qa
+      imagen: ${{ needs.publish.outputs.imagen }}
+      version: ${{ needs.build.outputs.version }}
+    secrets: inherit
+
+  deploy-prod:
+    name: Desplegar prod (requiere aprobación)
+    needs: [build, publish, deploy-qa]
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      ambiente: prod
+      imagen: ${{ needs.publish.outputs.imagen }}
+      version: ${{ needs.build.outputs.version }}
+    secrets: inherit
