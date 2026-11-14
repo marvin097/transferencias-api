@@ -13,3 +13,10 @@ core:
 logging:
   level:
     com.izalco.transferencias: WARN
+
+# En producción no se expone la consola de pruebas.
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false

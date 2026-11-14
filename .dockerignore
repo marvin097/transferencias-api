@@ -1,0 +1,3 @@
+# Solo el JAR final entra al contexto de construcción de la imagen.
+*
+!target/transferencias-api-*.jar

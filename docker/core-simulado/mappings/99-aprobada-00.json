@@ -1,0 +1,15 @@
+{
+  "name": "99-aprobada-00",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPath": "/core/transfer"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/xml"
+    },
+    "body": "<TransferenciaResponse><Codigo>00</Codigo><Referencia>SIM-{{randomValue length=10 type='ALPHANUMERIC' uppercase=true}}</Referencia></TransferenciaResponse>"
+  }
+}

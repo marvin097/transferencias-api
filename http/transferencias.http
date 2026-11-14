@@ -1,0 +1,103 @@
+### Pruebas manuales con la extensión REST Client de VS Code (o copie como curl).
+### Requiere: docker compose up --build
+
+@base = http://localhost:8080
+
+### 1. Transferencia aprobada (201). Repita con la MISMA llave: devuelve lo mismo, sin duplicar.
+POST {{base}}/transferencias
+Content-Type: application/json
+X-Idempotency-Key: demo-aprobada-0001
+
+{
+  "cuentaOrigen": "100200300",
+  "cuentaDestino": "900800700",
+  "bancoDestino": "BIZ-0042",
+  "monto": 150.75,
+  "moneda": "USD",
+  "concepto": "Pago de alquiler",
+  "fechaSolicitud": "2026-10-01T14:32:10-06:00"
+}
+
+### 2. Misma llave con otro monto (409 CONFLICTO_IDEMPOTENCIA)
+POST {{base}}/transferencias
+Content-Type: application/json
+X-Idempotency-Key: demo-aprobada-0001
+
+{
+  "cuentaOrigen": "100200300",
+  "cuentaDestino": "900800700",
+  "bancoDestino": "BIZ-0042",
+  "monto": 999.99,
+  "moneda": "USD",
+  "concepto": "Pago de alquiler",
+  "fechaSolicitud": "2026-10-01T14:32:10-06:00"
+}
+
+### 3. Saldo insuficiente (422) - monto 51.00
+POST {{base}}/transferencias
+Content-Type: application/json
+X-Idempotency-Key: demo-saldo-0001
+
+{
+  "cuentaOrigen": "100200300",
+  "cuentaDestino": "900800700",
+  "bancoDestino": "BIZ-0042",
+  "monto": 51.00,
+  "moneda": "USD",
+  "concepto": "Prueba saldo",
+  "fechaSolicitud": "2026-10-01T14:32:10-06:00"
+}
+
+### 4. Cuenta bloqueada (422) - monto 62.00
+POST {{base}}/transferencias
+Content-Type: application/json
+X-Idempotency-Key: demo-bloqueada-0001
+
+{
+  "cuentaOrigen": "100200300",
+  "cuentaDestino": "900800700",
+  "bancoDestino": "BIZ-0042",
+  "monto": 62.00,
+  "moneda": "USD",
+  "concepto": "Prueba bloqueo",
+  "fechaSolicitud": "2026-10-01T14:32:10-06:00"
+}
+
+### 5. Core no disponible (503) - monto 91.00
+POST {{base}}/transferencias
+Content-Type: application/json
+X-Idempotency-Key: demo-core-caido-0001
+
+{
+  "cuentaOrigen": "100200300",
+  "cuentaDestino": "900800700",
+  "bancoDestino": "BIZ-0042",
+  "monto": 91.00,
+  "moneda": "USD",
+  "concepto": "Prueba core caido",
+  "fechaSolicitud": "2026-10-01T14:32:10-06:00"
+}
+
+### 6. Core lento: tarda ~12 s y responde 202 EN_VERIFICACION - monto 99.99
+POST {{base}}/transferencias
+Content-Type: application/json
+X-Idempotency-Key: demo-core-lento-0001
+
+{
+  "cuentaOrigen": "100200300",
+  "cuentaDestino": "900800700",
+  "bancoDestino": "BIZ-0042",
+  "monto": 99.99,
+  "moneda": "USD",
+  "concepto": "Prueba timeout",
+  "fechaSolicitud": "2026-10-01T14:32:10-06:00"
+}
+
+### 7. Consultar una transferencia (copie el id del header Location de una respuesta anterior)
+GET {{base}}/transferencias/REEMPLAZAR-ID
+
+### 8. Salud de la API
+GET {{base}}/actuator/health
+
+### 9. Contrato OpenAPI
+GET {{base}}/openapi.yaml

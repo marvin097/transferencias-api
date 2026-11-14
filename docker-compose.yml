@@ -1,0 +1,71 @@
+# Ambiente local completo: API + SQL Server + core legado simulado.
+# Uso:  cp .env.example .env   (y cambiar las contraseñas)
+#       ./mvnw clean verify && docker compose up --build
+# Las contraseñas vienen del archivo .env, que NO se sube a git.
+
+services:
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Defina MSSQL_SA_PASSWORD en .env}
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1 -l 5 -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q 'SELECT 1' -o /dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  # Se ejecuta una vez: crea la base de datos y el login propio de la API.
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Defina MSSQL_SA_PASSWORD en .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Defina APP_DB_PASSWORD en .env}
+    volumes:
+      - ./docker/sqlserver/init.sql:/init.sql:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" -C -b -i /init.sql -v APP_DB_PASSWORD="$$APP_DB_PASSWORD"
+    restart: "no"
+
+  # Core legado simulado. La respuesta depende del monto:
+  #   51.00 -> 51 saldo insuficiente | 62.00 -> 62 cuenta bloqueada
+  #   91.00 -> 91 core no disponible | 99.99 -> tarda 15 s (timeout) | otro -> 00 aprobada
+  core-simulado:
+    image: wiremock/wiremock:3.10.0
+    command: ["--global-response-templating"]
+    ports:
+      - "8089:8080"
+    volumes:
+      - ./docker/core-simulado/mappings:/home/wiremock/mappings:ro
+
+  api:
+    build: .
+    image: transferencias-api:local
+    depends_on:
+      sqlserver-init:
+        condition: service_completed_successfully
+      core-simulado:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DB_URL: jdbc:sqlserver://sqlserver:1433;databaseName=transferencias;encrypt=true;trustServerCertificate=true
+      DB_USER: app_transferencias
+      DB_PASSWORD: ${APP_DB_PASSWORD:?Defina APP_DB_PASSWORD en .env}
+      CORE_URL: http://core-simulado:8080/core/transfer
+      CORE_USER: svc_core_dev
+      CORE_PASSWORD: ${CORE_PASSWORD:?Defina CORE_PASSWORD en .env}
+    ports:
+      - "8080:8080"
+
+volumes:
+  sqlserver-data:

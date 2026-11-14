@@ -28,6 +28,13 @@ management:
       probes:
         enabled: true
 
+# Swagger UI en /swagger-ui.html. Muestra el contrato escrito a mano (contract-first),
+# no uno generado desde el código.
+springdoc:
+  swagger-ui:
+    url: /openapi.yaml
+    path: /swagger-ui.html
+
 core:
   url: ${CORE_URL:http://localhost:8089/core/transfer}
   username: ${CORE_USER:}

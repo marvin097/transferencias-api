@@ -1,0 +1,21 @@
+{
+  "name": "04-core-lento-timeout",
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "urlPath": "/core/transfer",
+    "bodyPatterns": [
+      {
+        "matchesXPath": "//Importe[text()='99.99']"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/xml"
+    },
+    "body": "<TransferenciaResponse><Codigo>00</Codigo><Referencia>SIM-{{randomValue length=10 type='ALPHANUMERIC' uppercase=true}}</Referencia></TransferenciaResponse>",
+    "fixedDelayMilliseconds": 15000
+  }
+}
