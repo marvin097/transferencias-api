@@ -5,6 +5,7 @@
 # - build: compila, ejecuta las pruebas y FALLA si la cobertura de líneas es menor a 80 % (JaCoCo, fijo en el pom).
 # - publish: construye la imagen UNA sola vez con versión de release (nunca SNAPSHOT) y la publica en GHCR.
 # - deploy: promueve ESA MISMA imagen (referenciada por digest sha256) a dev, qa y prod.
+# - Políticas: rate limiting y client ID definidas en kong/kong.yml, validadas en build y aplicadas en cada ambiente.
 # - Identidad: todo usa el GITHUB_TOKEN efímero del pipeline (identidad de servicio), nunca un usuario personal.
 # - prod: el ambiente "prod" exige aprobación de un revisor y prohíbe que apruebe quien disparó el cambio.
 
@@ -49,6 +50,11 @@ jobs:
 
       - name: Fijar versión (sin SNAPSHOT)
         run: ./mvnw -B -ntp versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+
+      - name: Validar políticas del API Gateway (kong/kong.yml)
+        run: |
+          docker run --rm -v "$PWD/kong:/kong:ro" kong:3.9 sh -c \
+            'sed "s|__CLIENT_ID_APP_MOVIL__|validacion-ci|" /kong/kong.yml > /tmp/kong.yml && kong config parse /tmp/kong.yml'
 
       - name: Compilar, pruebas y cobertura mínima 80 %
         run: ./mvnw -B -ntp clean verify

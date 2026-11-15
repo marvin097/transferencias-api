@@ -65,8 +65,31 @@ services:
       CORE_URL: http://core-simulado:8080/core/transfer
       CORE_USER: ${CORE_USER:-svc_core_dev}
       CORE_PASSWORD: ${CORE_PASSWORD:?Defina CORE_PASSWORD en .env}
+    # Sin puerto publicado: la API solo es accesible a través del gateway (no se pueden saltar las políticas).
+    expose:
+      - "8080"
+
+  # API Gateway con las políticas como código (kong/kong.yml): client_id y rate limiting.
+  gateway:
+    image: kong:3.9
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /tmp/kong.yml
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_ADMIN_LISTEN: "off"          # sin API de administración: las políticas solo cambian por código
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      CLIENT_ID_APP_MOVIL: ${CLIENT_ID_APP_MOVIL:?Defina CLIENT_ID_APP_MOVIL en .env}
+    volumes:
+      - ./kong/kong.yml:/kong/kong.template.yml:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - sed "s|__CLIENT_ID_APP_MOVIL__|$$CLIENT_ID_APP_MOVIL|" /kong/kong.template.yml > /tmp/kong.yml && exec /docker-entrypoint.sh kong docker-start
     ports:
-      - "8080:8080"
+      - "8000:8000"
 
 volumes:
   sqlserver-data:

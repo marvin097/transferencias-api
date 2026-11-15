@@ -1,0 +1,54 @@
+# Políticas de la API como código (Kong Gateway, modo declarativo sin base de datos).
+# Este archivo es la ÚNICA fuente de verdad de las políticas: se versiona, se revisa en
+# pull request, el pipeline lo valida y se aplica igual en dev, qa y prod.
+#
+# El valor del client_id NO está aquí: __CLIENT_ID_APP_MOVIL__ se reemplaza al iniciar el
+# gateway con el secreto del ambiente (archivo .env en local, secretos de GitHub en el pipeline).
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: transferencias-api
+    url: http://api:8080
+    connect_timeout: 5000
+    # Mayor que el timeout de la API hacia el core (12 s): la API alcanza a responder
+    # 202 EN_VERIFICACION antes de que el gateway corte con 504 (lección del INC-2026-118).
+    read_timeout: 15000
+    write_timeout: 15000
+    routes:
+      # API de negocio: requiere client_id y tiene límite de solicitudes.
+      - name: transferencias
+        paths: [/transferencias]
+        strip_path: false
+        preserve_host: true
+        plugins:
+          # Política "Client ID enforcement": solo aplicaciones registradas.
+          - name: key-auth
+            config:
+              key_names: [client_id]
+              hide_credentials: true
+          # Política "Rate limiting": 20 solicitudes por minuto por aplicación.
+          - name: rate-limiting
+            config:
+              minute: 20
+              limit_by: consumer
+              policy: local
+              fault_tolerant: true
+
+      # Documentación (Swagger UI y contrato). Sin credenciales; en prod la API la desactiva.
+      - name: documentacion
+        paths: [/swagger-ui, /v3/api-docs, /openapi.yaml]
+        strip_path: false
+        preserve_host: true
+
+      # Salud para monitoreo y para el pipeline.
+      - name: salud
+        paths: [/actuator/health]
+        methods: [GET]
+        strip_path: false
+
+# Aplicaciones cliente registradas.
+consumers:
+  - username: app-movil-izalco
+    keyauth_credentials:
+      - key: "__CLIENT_ID_APP_MOVIL__"

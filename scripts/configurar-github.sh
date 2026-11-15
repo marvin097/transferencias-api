@@ -2,7 +2,7 @@
 # Configura en GitHub los ambientes dev, qa y prod como código (requiere GitHub CLI autenticado como dueño del repo).
 #   - prod: aprobación obligatoria de <usuario-aprobador> y prohibida la auto-aprobación.
 #   - prod: solo se puede desplegar desde la rama main.
-#   - Cada ambiente recibe sus propias contraseñas aleatorias como secretos (nadie las ve ni quedan en el repo).
+#   - Cada ambiente recibe sus propias contraseñas y client_id aleatorios como secretos (nadie las ve ni quedan en el repo).
 #
 # Uso: ./scripts/configurar-github.sh <usuario-aprobador>
 set -euo pipefail
@@ -36,6 +36,8 @@ JSON
   for SECRETO in MSSQL_SA_PASSWORD APP_DB_PASSWORD CORE_PASSWORD; do
     gh secret set "$SECRETO" --env "$AMB" --repo "$REPO" --body "$(generar)"
   done
+  # client_id de la app móvil para el API Gateway, distinto en cada ambiente.
+  gh secret set CLIENT_ID_APP_MOVIL --env "$AMB" --repo "$REPO" --body "app-movil-$AMB-$(openssl rand -hex 12)"
 done
 
 echo "Listo. Revise: https://github.com/$REPO/settings/environments"

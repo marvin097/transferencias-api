@@ -13,9 +13,14 @@ info:
     - Si la respuesta fue `503 CORE_NO_DISPONIBLE`, se puede reintentar con la **misma** llave.
 
     **Errores:** todos los errores usan RFC 9457 (`application/problem+json`) con un campo `codigo` estable.
+
+    **Acceso:** la API se consume a través del API Gateway, que exige el header `client_id`
+    (aplicación registrada) y limita a 20 solicitudes por minuto por aplicación.
 servers:
-  - url: http://localhost:8080
-    description: Local
+  - url: /
+    description: Mismo origen (API Gateway)
+security:
+  - clientId: []
 tags:
   - name: Transferencias
 paths:
@@ -63,6 +68,18 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '401':
+          description: Falta el header client_id o no corresponde a una aplicación registrada (API Gateway).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorGateway'
+        '429':
+          description: Se superó el límite de 20 solicitudes por minuto para esta aplicación (API Gateway).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorGateway'
         '409':
           description: La llave ya se usó con otro contenido (CONFLICTO_IDEMPOTENCIA) o hay otra solicitud en proceso (SOLICITUD_EN_PROCESO).
           content:
@@ -119,6 +136,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransferenciaResponse'
+        '401':
+          description: Falta el header client_id o no corresponde a una aplicación registrada (API Gateway).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorGateway'
+        '429':
+          description: Se superó el límite de 20 solicitudes por minuto para esta aplicación (API Gateway).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorGateway'
         '404':
           description: No existe (TRANSFERENCIA_NO_ENCONTRADA).
           content:
@@ -126,6 +155,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 components:
+  securitySchemes:
+    clientId:
+      type: apiKey
+      in: header
+      name: client_id
+      description: Identificador de la aplicación cliente registrada en el API Gateway.
   parameters:
     IdempotencyKey:
       name: X-Idempotency-Key
@@ -228,6 +263,13 @@ components:
         registradaEn:
           type: string
           format: date-time
+    ErrorGateway:
+      type: object
+      description: Error devuelto por el API Gateway antes de llegar a la API.
+      properties:
+        message:
+          type: string
+          example: API rate limit exceeded
     Error:
       type: object
       description: RFC 9457 Problem Details.

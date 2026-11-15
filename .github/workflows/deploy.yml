@@ -40,6 +40,7 @@ jobs:
       MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
       APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
       CORE_PASSWORD: ${{ secrets.CORE_PASSWORD }}
+      CLIENT_ID_APP_MOVIL: ${{ secrets.CLIENT_ID_APP_MOVIL }}
     steps:
       - uses: actions/checkout@v5
 
@@ -47,7 +48,7 @@ jobs:
         run: |
           [[ "$API_IMAGE" == *@sha256:* ]] || { echo "::error::Solo se despliegan imágenes por digest"; exit 1; }
           [[ "${{ inputs.version }}" != *SNAPSHOT* ]] || { echo "::error::No se despliegan SNAPSHOT"; exit 1; }
-          for s in MSSQL_SA_PASSWORD APP_DB_PASSWORD CORE_PASSWORD; do
+          for s in MSSQL_SA_PASSWORD APP_DB_PASSWORD CORE_PASSWORD CLIENT_ID_APP_MOVIL; do
             [ -n "${!s}" ] || { echo "::error::Falta el secreto $s en el ambiente ${{ inputs.ambiente }}"; exit 1; }
           done
 
@@ -58,8 +59,9 @@ jobs:
         run: |
           docker compose pull api
           docker compose up -d --no-build
+          # Todo se verifica a través del API Gateway (puerto 8000), con las políticas aplicadas.
           for i in $(seq 1 60); do
-            if curl -sf localhost:8080/actuator/health > /dev/null; then echo "API arriba"; exit 0; fi
+            if curl -sf localhost:8000/actuator/health > /dev/null; then echo "API arriba detrás del gateway"; exit 0; fi
             sleep 5
           done
           echo "::error::La API no respondió a tiempo"; exit 1
@@ -67,31 +69,48 @@ jobs:
       - name: Pruebas de humo
         run: |
           set -euo pipefail
+          BASE=localhost:8000
+          CLIENTE="client_id: $CLIENT_ID_APP_MOVIL"
           LLAVE="smoke-${{ inputs.ambiente }}-${GITHUB_RUN_ID}"
           CUERPO='{"cuentaOrigen":"100200300","cuentaDestino":"900800700","bancoDestino":"BIZ-0042","monto":150.75,"moneda":"USD","concepto":"Prueba de humo","fechaSolicitud":"2026-10-01T14:32:10-06:00"}'
+          esperar() { [ "$2" = "$3" ] || { echo "::error::$1: se esperaba $3 y llegó $2"; exit 1; }; echo "OK  $1 ($2)"; }
 
-          curl -sf localhost:8080/actuator/health | grep -q '"UP"'
+          curl -sf $BASE/actuator/health | grep -q '"UP"'
 
-          echo "1) Transferencia aprobada"
-          R1=$(curl -s -o /tmp/r1.json -w '%{http_code}' -X POST localhost:8080/transferencias \
+          # --- Políticas del gateway ---
+          R=$(curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/transferencias -H 'Content-Type: application/json' -d "$CUERPO")
+          esperar "Sin client_id" "$R" 401
+          R=$(curl -s -o /dev/null -w '%{http_code}' $BASE/transferencias/x -H 'client_id: app-no-registrada')
+          esperar "client_id no registrado" "$R" 401
+
+          # --- Negocio ---
+          R=$(curl -s -o /tmp/r1.json -w '%{http_code}' -X POST $BASE/transferencias -H "$CLIENTE" \
             -H 'Content-Type: application/json' -H "X-Idempotency-Key: $LLAVE" -d "$CUERPO")
-          [ "$R1" = "201" ] || { cat /tmp/r1.json; echo "::error::Se esperaba 201 y llegó $R1"; exit 1; }
+          [ "$R" = "201" ] || cat /tmp/r1.json
+          esperar "Transferencia aprobada" "$R" 201
 
-          echo "2) Reintento con la misma llave no duplica"
-          curl -s -D /tmp/h2.txt -o /dev/null -X POST localhost:8080/transferencias \
+          curl -s -D /tmp/h2.txt -o /dev/null -X POST $BASE/transferencias -H "$CLIENTE" \
             -H 'Content-Type: application/json' -H "X-Idempotency-Key: $LLAVE" -d "$CUERPO"
           grep -qi '^Idempotent-Replayed: true' /tmp/h2.txt || { echo "::error::El reintento no fue idempotente"; exit 1; }
+          echo "OK  Reintento con la misma llave no duplica"
 
-          echo "3) Rechazo de negocio traducido"
-          R3=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/transferencias \
+          R=$(curl -s -o /dev/null -w '%{http_code}' -X POST $BASE/transferencias -H "$CLIENTE" \
             -H 'Content-Type: application/json' -H "X-Idempotency-Key: $LLAVE-51" -d "${CUERPO/150.75/51.00}")
-          [ "$R3" = "422" ] || { echo "::error::Se esperaba 422 y llegó $R3"; exit 1; }
+          esperar "Saldo insuficiente traducido" "$R" 422
 
           if [ "${{ inputs.ambiente }}" = "prod" ]; then
-            echo "4) Swagger UI apagado en prod"
-            R4=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/swagger-ui.html)
-            [ "$R4" = "404" ] || { echo "::error::Swagger UI expuesto en prod ($R4)"; exit 1; }
+            R=$(curl -s -o /dev/null -w '%{http_code}' $BASE/swagger-ui.html)
+            esperar "Swagger UI apagado en prod" "$R" 404
           fi
+
+          # --- Rate limiting: al superar 20 solicitudes por minuto debe responder 429 ---
+          LIMITADO=no
+          for i in $(seq 1 25); do
+            R=$(curl -s -o /dev/null -w '%{http_code}' $BASE/transferencias/no-existe -H "$CLIENTE")
+            if [ "$R" = "429" ]; then LIMITADO=si; break; fi
+          done
+          [ "$LIMITADO" = "si" ] || { echo "::error::El rate limiting no se aplicó"; exit 1; }
+          echo "OK  Rate limiting (429 después de 20 solicitudes/minuto)"
           echo "Pruebas de humo OK"
 
       - name: Registro del despliegue
@@ -104,6 +123,7 @@ jobs:
             echo "| Versión | \`${{ inputs.version }}\` |"
             echo "| Imagen | \`${{ inputs.imagen }}\` |"
             echo "| Identidad de despliegue | GITHUB_TOKEN (github-actions[bot]) |"
+            echo "| Políticas aplicadas | client_id + rate limiting 20/min (kong/kong.yml) |"
             echo "| Cambio iniciado por | ${{ github.triggering_actor }} |"
             echo "| Commit | \`${{ github.sha }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
