@@ -4,7 +4,7 @@
 
 @base = http://localhost:8000
 # Debe coincidir con CLIENT_ID_APP_MOVIL de su archivo .env
-@clientId = app-movil-local-0001
+@clientId = app-movil-fd6aa48257803113
 
 ### 1. Transferencia aprobada (201). Repita con la MISMA llave: devuelve lo mismo, sin duplicar.
 POST {{base}}/transferencias
