@@ -53,7 +53,7 @@ jobs:
 
       - name: Validar políticas del API Gateway (kong/kong.yml)
         run: |
-          docker run --rm -v "$PWD/kong:/kong:ro" kong:3.9 sh -c \
+          docker run --rm -e KONG_DATABASE=off -v "$PWD/kong:/kong:ro" kong:3.9 sh -c \
             'sed "s|__CLIENT_ID_APP_MOVIL__|validacion-ci|" /kong/kong.yml > /tmp/kong.yml && kong config parse /tmp/kong.yml'
 
       - name: Compilar, pruebas y cobertura mínima 80 %
@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Guardar JAR
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: app-jar
           path: target/transferencias-api-${{ steps.version.outputs.version }}.jar
@@ -82,7 +82,7 @@ jobs:
 
       - name: Guardar reporte de cobertura
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: reporte-cobertura
           path: target/site/jacoco/
